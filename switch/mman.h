@@ -2,7 +2,8 @@
 #define MMAN_H
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 #include <stdlib.h>
@@ -12,109 +13,91 @@ extern "C" {
 #include <switch.h>
 #include <stdlib.h>
 
-//#include "3ds_utils.h"
+#define PROT_READ 0b001
+#define PROT_WRITE 0b010
+#define PROT_EXEC 0b100
+#define MAP_PRIVATE 2
+#define MAP_FIXED 0x10
+#define MAP_ANONYMOUS 0x20
 
-#define PROT_READ       0b001
-#define PROT_WRITE      0b010
-#define PROT_EXEC       0b100
-#define MAP_PRIVATE     2
-#define MAP_FIXED       0x10
-#define MAP_ANONYMOUS   0x20
+#define MAP_FAILED ((void *)-1)
 
-#define MAP_FAILED      ((void *)-1)
+Jit dynarec_jit;
+void *jit_rx_addr = 0;
+u_char *jit_dynrec = 0;
+void *jit_rw_addr = 0;
+void *jit_rw_buffer = 0;
+void *jit_old_addr = 0;
+size_t jit_len = 0;
+bool jit_is_executable = false;
+extern char __start__;
 
-static void* dynarec_cache = NULL;
-static void* dynarec_cache_mapping = NULL;
-
-static inline void* mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
+static inline void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
 {
-   (void)fd;
-   (void)offset;
+    (void)fd;
+    (void)offset;
 
-   //void* addr_out;
-    Result rc = svcMapPhysicalMemory(addr, len);
-    if (R_FAILED(rc))
+    jit_len = len;
+    if (R_SUCCEEDED(jitCreate(&dynarec_jit, jit_len)))
     {
-        printf("mmap failed\n");
-        return malloc(len);
+        jit_len = dynarec_jit.size;
+        jit_rw_buffer = malloc(jit_len);
+        jit_rx_addr = (void*)(&__start__ - 0x1000 - jit_len);
+        jit_old_addr = dynarec_jit.rx_addr;
+        dynarec_jit.rx_addr = jit_rx_addr;
+        jit_rw_addr = jitGetRwAddr(&dynarec_jit);
+        jit_dynrec = (u_char*)jit_rw_addr;
+        printf("Jit Initialized: RX %p, RW %p\n", jit_rx_addr, jit_rw_addr);
+        printf("Transition to executable\n");
+        jitTransitionToExecutable(&dynarec_jit);
+        jit_is_executable = true;
+
+        return jit_rx_addr;
     }
+    else
+    {
+        printf("Jit failed!\n");
+        return (void*)-1;
+    }
+}
 
-    return addr;
+static inline void jit_force_writeable()
+{
+  if(jit_is_executable){
+    //printf("Setting the CodeMemory writable\n");
+    svcSetProcessMemoryPermission(envGetOwnProcessHandle(), (u64) jit_rx_addr, jit_len, Perm_Rw);
+    jit_is_executable = false;
+  }
+}
 
-//   if((prot == (PROT_READ | PROT_WRITE | PROT_EXEC)) &&
-//      (flags == (MAP_PRIVATE | MAP_ANONYMOUS)))
-//   {
-//      if(true)// __ctr_svchax)
-//     {
-//         /* this hack works only for pcsx_rearmed */
-//         uint32_t currentHandle;
-//
-//         if(!dynarec_cache)
-//            dynarec_cache = memalign(0x1000, len);
-//
-//         //svcDuplicateHandle(&currentHandle, 0xFFFF8001);
-//         //svcControlProcessMemory(currentHandle, addr, dynarec_cache,
-//         //                        len, MEMOP_MAP, prot);
-//         svcCloseHandle(currentHandle);
-//         dynarec_cache_mapping = addr;
-//         return addr;
-//      }
-//      else
-//      {
-//         printf("tried to mmap RWX pages without svcControlProcessMemory access !\n");
-//         return MAP_FAILED;
-//      }
-//
-//   }
-
-//   addr_out = memalign(0x1000, len);
-//   if(!addr_out)
-//      return MAP_FAILED;
-//
-//   return addr_out;
+static inline void jit_force_executable()
+{
+  if(!jit_is_executable){
+    //printf("Transition to executable\n");
+    jitTransitionToWritable(&dynarec_jit);
+    jitTransitionToExecutable(&dynarec_jit);
+    jit_is_executable = true;
+  }
 }
 
 static inline int mprotect(void *addr, size_t len, int prot)
 {
     return 0;
-   //if(true) // __ctr_svchax)
-   //{
-   //   uint32_t currentHandle;
-   //   //svcDuplicateHandle(&currentHandle, 0xFFFF8001);
-   //   //svcControlProcessMemory(currentHandle, addr, NULL,
-   //   //                        len, MEMOP_PROT, prot);
-   //   svcCloseHandle(currentHandle);
-   //   return 0;
-   //}
-
-   //printf("mprotect called without svcControlProcessMemory access !\n");
-   //return -1;
 }
 
 static inline int munmap(void *addr, size_t len)
 {
-    Result rc = svcUnmapPhysicalMemory(addr, len);
-    if (R_FAILED(rc))
-    {
-        printf("munmap failed\n");
-        free(addr);
-    }
-    return 0;
-//   if((addr == dynarec_cache_mapping) && true)//__ctr_svchax)
-//   {
-//      uint32_t currentHandle;
-//      //svcDuplicateHandle(&currentHandle, 0xFFFF8001);
-//      //svcControlProcessMemory(currentHandle,
-//      //                        dynarec_cache, dynarec_cache_mapping,
-//      //                        len, MEMOP_UNMAP, 0b111);
-//      svcCloseHandle(currentHandle);
-//      dynarec_cache_mapping = NULL;
-//
-//   }
-//   else
-      free(addr);
+    jitTransitionToWritable(&dynarec_jit);
 
-   return 0;
+    if(jit_old_addr != 0)
+        dynarec_jit.rx_addr = jit_old_addr;
+    jit_old_addr = 0;
+
+    jitClose(&dynarec_jit);
+    free(jit_rw_buffer);
+    jit_rw_buffer = 0;
+    
+    return 0;
 }
 
 #ifdef __cplusplus
@@ -122,4 +105,3 @@ static inline int munmap(void *addr, size_t len)
 #endif
 
 #endif // MMAN_H
-

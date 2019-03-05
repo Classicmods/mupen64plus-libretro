@@ -30,10 +30,6 @@ else ifneq (,$(findstring armv,$(platform)))
     ifeq (,$(findstring classic_,$(platform)))
         override platform += unix
     endif
-else ifneq (,$(findstring rpi,$(platform)))
-   override platform += unix
-else ifneq (,$(findstring odroid,$(platform)))
-   override platform += unix
 endif
 
 # system platform
@@ -65,6 +61,8 @@ ifeq ($(ARCH), $(filter $(ARCH), i386 i686))
    PIC = 0
 else ifeq ($(ARCH), $(filter $(ARCH), arm))
    WITH_DYNAREC = arm
+else ifeq ($(ARCH), $(filter $(ARCH), aarch64))
+   WITH_DYNAREC = aarch64
 endif
 
 TARGET_NAME := mupen64plus
@@ -103,6 +101,7 @@ else ifneq (,$(findstring rpi,$(platform)))
       LLE = 0
       CPUFLAGS += -DVC
       GL_LIB := -L/opt/vc/lib -lbrcmGLESv2
+      EGL_LIB := -lbrcmEGL
       INCFLAGS += -I/opt/vc/include -I/opt/vc/include/interface/vcos -I/opt/vc/include/interface/vcos/pthreads
    endif
    WITH_DYNAREC=arm
@@ -157,17 +156,15 @@ else ifeq ($(platform), classic_armv7_a7)
 # Nintendo Switch
 else ifeq ($(platform), libnx)
    include $(DEVKITPRO)/libnx/switch_rules
-   PIC = 1
+   PIC ?= 1
+   WITH_DYNAREC := aarch64
    TARGET := $(TARGET_NAME)_libretro_$(platform).a
    CPUOPTS := -g -march=armv8-a -mtune=cortex-a57 -mtp=soft -mcpu=cortex-a57+crc+fp+simd
-   PLATCFLAGS = -O3 -ffast-math -funsafe-math-optimizations -fPIE -I$(PORTLIBS)/include/ -I$(LIBNX)/include/ -ffunction-sections -fdata-sections -ftls-model=local-exec -specs=$(LIBNX)/switch.specs
+   PLATCFLAGS = -O3 -I$(PORTLIBS)/include/ -I$(LIBNX)/include/ -ffunction-sections -fdata-sections -ftls-model=local-exec -specs=$(LIBNX)/switch.specs
    PLATCFLAGS += $(INCLUDE) -D__SWITCH__=1 -DSWITCH -DHAVE_LIBNX -D_GLIBCXX_USE_C99_MATH_TR1 -D_LDBL_EQ_DBL -funroll-loops
-   SOURCES_C += $(CORE_DIR)/src/r4300/empty_dynarec.c
    CXXFLAGS += -fno-rtti -std=gnu++11
-   COREFLAGS += -DOS_LINUX
+   COREFLAGS += -DOS_LINUX -DUSE_DEPTH_RENDERBUFFER
    GLES = 0
-   WITH_DYNAREC =
-   DYNAREC_USED = 0
    STATIC_LINKING = 1
 
 # ODROIDs
@@ -183,8 +180,8 @@ else ifneq (,$(findstring odroid,$(platform)))
    ifneq (,$(findstring ODROIDC,$(BOARD)))
       # ODROID-C1
       CPUFLAGS += -mcpu=cortex-a5
-   else ifneq (,$(findstring ODROID-XU3,$(BOARD)))
-      # ODROID-XU3 & -XU3 Lite
+   else ifneq (,$(findstring ODROID-XU,$(BOARD)))
+      # ODROID-XU3 & -XU3 Lite and -XU4
       ifeq "$(shell expr `gcc -dumpversion` \>= 4.9)" "1"
          CPUFLAGS += -march=armv7ve -mcpu=cortex-a15.cortex-a7
       else
